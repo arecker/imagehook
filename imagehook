@@ -1,0 +1,147 @@
+#!/usr/bin/env python
+import argparse
+import logging
+import os
+import pathlib
+import shutil
+import subprocess
+import sys
+
+# Change these if you want.
+MAX_WIDTH = 800
+MAX_HEIGHT = 800
+
+logger = logging.Logger(__name__)
+parser = argparse.ArgumentParser()
+
+group = parser.add_argument_group('Run Options')
+group.add_argument('-v', '--verbose', action='store_true')
+
+group = parser.add_argument_group('Install Mode')
+group.add_argument('--install', action='store_true')
+group.add_argument('--install-dir')
+
+group = parser.add_argument_group('Uninstall Mode')
+group.add_argument('--uninstall', action='store_true')
+group.add_argument('--uninstall-dir')
+
+group = parser.add_argument_group('Scan Mode')
+group.add_argument('--scan', action='store_true')
+group.add_argument('--scan-dir')
+
+
+def main(args):
+    logger.debug('running program with args %s', vars(args))
+
+    if args.install:
+        if not args.install_dir:
+            logger.error('--install-dir required')
+            sys.exit(1)
+
+        symlink_src = pathlib.Path(__file__)
+        hooks_dir = pathlib.Path(args.install_dir) / '.git/hooks/'
+        symlink_target = hooks_dir / 'pre-commit'
+
+        try:
+            symlink_target.symlink_to(symlink_src)
+            logger.debug('created symlink %s -> %s',
+                         symlink_target, symlink_src)
+        except FileExistsError:
+            if symlink_target.resolve() != symlink_src:
+                logger.error('some other file exists at %s', symlink_target)
+                sys.exit(1)
+
+        logger.info('git hook installed to %s', symlink_target)
+        sys.exit(0)
+
+    if args.uninstall:
+        if not args.uninstall_dir:
+            logger.error('--uninstall-dir required')
+            sys.exit(1)
+
+        symlink_src = pathlib.Path(__file__)
+        hooks_dir = pathlib.Path(args.uninstall_dir) / '.git/hooks/'
+        symlink_target = hooks_dir / 'pre-commit'
+
+        # check that link exists
+        if not symlink_target.exists():
+            logger.error(
+                '%s does not exist, nothing to uninstall!', symlink_target)
+            sys.exit(1)
+
+        # check that link is correct
+        if not symlink_target.is_symlink() or symlink_target.resolve() != symlink_src:
+            logger.error('%s exists, but it is not a symlink to imagehook!')
+            sys.exit(1)
+
+        # remove symlink
+        symlink_target.unlink()
+        logger.info('successfully unlinked imagehook from %s', symlink_target)
+        sys.exit(0)
+
+    if args.scan:
+        if not args.scan_dir:
+            logger.error('--scan-dir required')
+            sys.exit(1)
+        images = list(filter(is_image, pathlib.Path(args.scan_dir).glob('**/*.*')))
+        total = len(images)
+        for i, image in enumerate(images):
+            resize_image(image)
+            logger.info('resized %s (%d/%d)', image, i + 1, total)
+        sys.exit(0)
+
+    logger.info('running imagehook as a git hook')
+    new_images = list(filter(is_image, fetch_new_staged_files()))
+    if not new_images:
+        logger.info('no new images committed, nothing to do.')
+        sys.exit(0)
+
+    for img in new_images:
+        resize_image(img)
+        logger.info('resized %s', path)
+
+    # stage everything again
+    subprocess.run('git add -A'.split(), check=True)
+    logger.info('imagehook finished')
+
+
+def fetch_new_staged_files():
+    cmd = 'git diff --name-only --cached'.split()
+    result = subprocess.run(cmd, check=True, capture_output=True)
+    result = result.stdout.decode().strip()
+    result = map(pathlib.Path, result.splitlines())
+    result = filter(lambda p: p.is_file(), result)
+    return list(sorted([str(p) for p in result]))
+
+
+def is_image(path):
+    return pathlib.Path(path).suffix.lower() in (
+        '.gif',
+        '.jpeg',
+        '.jpg',
+        '.mng',
+        '.png',
+        '.tiff',
+    )
+
+
+def resize_image(path: str):
+    cmd = 'convert {path} -resize {height}x{width} -auto-orient {path}'.format(
+        path=path, height=MAX_HEIGHT, width=MAX_WIDTH).split()
+    result = subprocess.run(cmd, check=True)
+
+
+if __name__ == '__main__':
+    args = parser.parse_args()
+
+    if args.verbose:
+        level = logging.DEBUG
+    else:
+        level = logging.INFO
+
+    handler = logging.StreamHandler(sys.stderr)
+    formatter = logging.Formatter('%(levelname)s: %(message)s')
+    handler.setFormatter(formatter)
+    handler.setLevel(level)
+    logger.addHandler(handler)
+    main(args)
