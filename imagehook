@@ -98,7 +98,7 @@ def main(args):
 
     for img in new_images:
         resize_image(img)
-        logger.info('resized %s', path)
+        logger.info('resized %s', img)
 
     # stage everything again
     subprocess.run('git add -A'.split(), check=True)
